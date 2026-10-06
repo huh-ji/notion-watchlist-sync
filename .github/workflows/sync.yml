@@ -1,0 +1,51 @@
+name: Watchlist sync
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # ';'로 끝나는 새 항목 채우기
+    - cron: "4 * * * *"     # 매시간 전체 갱신 (새 시즌·에피소드 등)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "trigger = ';' 항목만, sync = 전체 갱신, all = 둘 다"
+        type: choice
+        options: [all, trigger, sync]
+        default: all
+      dry_run:
+        description: "노션에 쓰지 않고 바뀔 내용만 보기"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write   # 아래 'Keep schedule alive' 단계용
+
+concurrency:
+  group: watchlist
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Sync
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          MODE: ${{ inputs.mode || (github.event.schedule == '4 * * * *' && 'all' || 'trigger') }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python watchlist_sync.py "$MODE"
+      # 공개 저장소는 60일 동안 커밋이 없으면 예약 실행이 꺼진다 → 매시간 다시 켜 둔다
+      - name: Keep schedule alive
+        if: github.event.schedule == '4 * * * *'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/sync.yml/enable"
