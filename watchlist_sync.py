@@ -583,7 +583,9 @@ def main():
         key = os.environ.get("TMDB_API_KEY")
         missing = [n for n, v in (("NOTION_TOKEN", token), ("NOTION_DATABASE_ID", db_id), ("TMDB_API_KEY", key)) if not v]
         if missing:
-            raise Fatal("다음 값이 설정되지 않았습니다: " + ", ".join(missing))
+            # 시크릿 등록 전에는 실패 메일이 쌓이지 않도록 조용히 건너뜀
+            log.warning("Secrets가 없어 건너뜁니다: %s", ", ".join(missing))
+            return
         notion = Notion(token, db_id)
         notion.load_schema()
         runner = Runner(notion, TMDB(key, os.environ.get("TMDB_LANGUAGE", "en-US")))
