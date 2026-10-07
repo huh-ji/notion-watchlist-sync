@@ -2,24 +2,32 @@
 """노션 Watchlist DB를 TMDB 정보로 채우고 주기적으로 갱신한다.
 
 사용법:
+    python watchlist_sync.py auto      # ';' 항목 채우기 + 필요할 때만 전체 갱신 (예약 실행용)
     python watchlist_sync.py trigger   # Name이 ';'로 끝나는 행만 찾아서 채우기
     python watchlist_sync.py sync      # ID가 있는 모든 행을 TMDB 최신 정보로 갱신
-    python watchlist_sync.py all       # 둘 다
+
+auto의 전체 갱신 조건 (마지막 전체 갱신 시각은 .sync-state.json에 저장):
+    - 마지막 전체 갱신 후 FULL_SYNC_EVERY_DAYS(기본 14)일이 지났거나
+    - 새 ';' 항목이 있었고, 마지막 전체 갱신 후 FULL_SYNC_STALE_DAYS(기본 3)일이 지났을 때
 
 환경 변수:
     NOTION_TOKEN        노션 내부 통합(integration) 시크릿
     NOTION_DATABASE_ID  Watchlist DB의 ID 또는 URL
-    TMDB_API_KEY        TMDB API 키(v3) 또는 읽기 토큰(v4)
+    TMDB_API_KEY        TMDB API 읽기 토큰(v4) 또는 API 키(v3)
     TMDB_LANGUAGE       장르·줄거리 언어 (기본 en-US)
     CERT_COUNTRY        관람 등급 기준 국가 (기본 US)
+    WATCH_REGION        VOD에 넣을 스트리밍 서비스 기준 국가 (기본 KR)
     DRY_RUN=1           노션에 쓰지 않고 바뀔 내용만 출력
     LOG_TITLES=1        로그에 작품 제목 표시 (공개 저장소에서는 끄는 것을 권장)
 """
+import json
 import logging
 import os
 import re
 import sys
 import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import requests
 
@@ -43,6 +51,21 @@ TYPE_TV, TYPE_MOVIE = "TV Series", "Movie"
 log = logging.getLogger("watchlist")
 DRY_RUN = bool(os.environ.get("DRY_RUN"))
 LOG_TITLES = bool(os.environ.get("LOG_TITLES"))
+
+HERE = Path(__file__).resolve().parent
+STATE_FILE = HERE / ".sync-state.json"
+FULL_SYNC_EVERY = timedelta(days=float(os.environ.get("FULL_SYNC_EVERY_DAYS") or 14))
+FULL_SYNC_STALE = timedelta(days=float(os.environ.get("FULL_SYNC_STALE_DAYS") or 3))
+
+_vod = json.loads((HERE / "vod.json").read_text(encoding="utf-8"))
+VOD_KEEP = set(_vod["keep"])
+VOD_ALIASES = _vod["aliases"]
+WATCH_REGION = os.environ.get("WATCH_REGION", "KR")
+
+
+def vod_name(name):
+    name = name.strip()
+    return VOD_ALIASES.get(name, name)
 
 
 class Fatal(Exception):
@@ -238,7 +261,7 @@ class TMDB:
         return self._countries.get(code) or code
 
     def details(self, kind, tmdb_id):
-        extra = "credits,external_ids,videos,translations," + (
+        extra = "credits,external_ids,videos,translations,watch/providers," + (
             "content_ratings" if kind == "tv" else "release_dates")
         return self.get(f"/{kind}/{tmdb_id}", append_to_response=extra,
                         include_video_language="en,ko,ja,null")
@@ -383,7 +406,16 @@ def build_values(tmdb, kind, d):
         "Episodes": d.get("number_of_episodes") if tv else None,
         "Seasons": d.get("number_of_seasons") if tv else None,
     }
-    networks = [n["name"] for n in d.get("networks") or []] if tv else []
+    # VOD 후보: 한국 방송사 + keep 목록의 OTT 방송사 + 한국에서 구독·무료로 볼 수 있는 서비스
+    networks = []
+    if tv:
+        for n in d.get("networks") or []:
+            name = vod_name(n["name"])
+            if n.get("origin_country") == "KR" or name in VOD_KEEP:
+                networks.append(name)
+        region = ((d.get("watch/providers") or {}).get("results") or {}).get(WATCH_REGION) or {}
+        for kind_ in ("flatrate", "free", "ads"):
+            networks += [vod_name(p["provider_name"]) for p in region.get(kind_) or []]
 
     ko_title = None
     for t in (d.get("translations") or {}).get("translations") or []:
@@ -434,23 +466,24 @@ class Runner:
 
     def merged_extras(self, page, values, networks, ko_title):
         props = page["properties"]
-        if networks:
-            # 직접 넣은 OTT(Netflix, 쿠팡플레이 등)는 지우지 않고 방송사만 추가
-            vod = list(read_prop(props.get(P_VOD)) or [])
-            for n in networks:
-                if option_name(n) not in vod:
-                    vod.append(n)
-            values[P_VOD] = vod
+        # 기존 값은 keep 목록(OTT·영화관 등)만 남기고 해외 방송사는 지움. 방송사는 TMDB에서 매번 다시 계산.
+        vod = []
+        for v in [vod_name(x) for x in read_prop(props.get(P_VOD)) or [] if vod_name(x) in VOD_KEEP] + networks:
+            if option_name(v) not in [option_name(x) for x in vod]:
+                vod.append(v)
+        values[P_VOD] = vod
         if ko_title and not read_prop(props.get(P_KO_TITLE)):
             values[P_KO_TITLE] = ko_title
 
     def trigger(self):
         flt = {"property": P_NAME, "title": {"ends_with": ";"}}
+        seen = 0
         for page in self.notion.query(flt):
             raw = read_prop(page["properties"].get(P_NAME)) or ""
             query, kind, year = parse_trigger(raw)
             if not query:
                 continue
+            seen += 1
             log.info("[채우기] %s", self.label(page, raw))
             try:
                 hit = self.tmdb.find(query, kind, year)
@@ -476,6 +509,7 @@ class Runner:
                     self.set_title(page, f"{query} | Error!")
                 except Exception:
                     pass
+        return seen
 
     def sync(self):
         flt = {"and": [
@@ -525,11 +559,24 @@ class Runner:
                 self.stats["오류"] += 1
 
 
+def load_last_full_sync():
+    try:
+        raw = json.loads(STATE_FILE.read_text(encoding="utf-8"))["last_full_sync"]
+        return datetime.fromisoformat(raw)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def save_last_full_sync(when):
+    STATE_FILE.write_text(json.dumps({"last_full_sync": when.isoformat(timespec="seconds")}) + "\n",
+                          encoding="utf-8")
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    mode = (sys.argv[1] if len(sys.argv) > 1 else "all").lower()
-    if mode not in ("trigger", "sync", "all"):
-        sys.exit("사용법: watchlist_sync.py [trigger|sync|all]")
+    mode = (sys.argv[1] if len(sys.argv) > 1 else "auto").lower()
+    if mode not in ("auto", "trigger", "sync"):
+        sys.exit("사용법: watchlist_sync.py [auto|trigger|sync]")
     try:
         token = os.environ.get("NOTION_TOKEN")
         db_id = os.environ.get("NOTION_DATABASE_ID")
@@ -542,10 +589,28 @@ def main():
         runner = Runner(notion, TMDB(key, os.environ.get("TMDB_LANGUAGE", "en-US")))
         if DRY_RUN:
             log.info("DRY_RUN: 노션에 쓰지 않습니다")
-        if mode in ("trigger", "all"):
-            runner.trigger()
-        if mode in ("sync", "all"):
+
+        new_items = runner.trigger() if mode in ("auto", "trigger") else 0
+
+        full = mode == "sync"
+        if mode == "auto":
+            now = datetime.now(timezone.utc)
+            last = load_last_full_sync()
+            age = now - last if last else None
+            if age is None:
+                log.info("전체 갱신 기록이 없어 전체 갱신합니다")
+                full = True
+            elif age >= FULL_SYNC_EVERY:
+                log.info("마지막 전체 갱신 후 %d일 지나 전체 갱신합니다", age.days)
+                full = True
+            elif new_items and age >= FULL_SYNC_STALE:
+                log.info("새 항목이 있고 마지막 전체 갱신 후 %d일 지나 전체 갱신합니다", age.days)
+                full = True
+        if full:
+            started = datetime.now(timezone.utc)
             runner.sync()
+            if not DRY_RUN:
+                save_last_full_sync(started)
         log.info("완료 — %s", ", ".join(f"{k} {v}" for k, v in runner.stats.items()))
     except Fatal as e:
         log.error("중단: %s", e)

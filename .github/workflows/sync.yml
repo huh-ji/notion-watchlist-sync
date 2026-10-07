@@ -2,23 +2,21 @@ name: Watchlist sync
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # ';'로 끝나는 새 항목 채우기
-    - cron: "4 * * * *"     # 매시간 전체 갱신 (새 시즌·에피소드 등)
+    - cron: "*/5 * * * *"   # ';' 새 항목 채우기 (+ 필요할 때만 전체 갱신)
   workflow_dispatch:
     inputs:
       mode:
-        description: "trigger = ';' 항목만, sync = 전체 갱신, all = 둘 다"
+        description: "auto = 평소처럼, trigger = ';' 항목만, sync = 지금 전체 갱신"
         type: choice
-        options: [all, trigger, sync]
-        default: all
+        options: [auto, trigger, sync]
+        default: auto
       dry_run:
         description: "노션에 쓰지 않고 바뀔 내용만 보기"
         type: boolean
         default: false
 
 permissions:
-  contents: read
-  actions: write   # 아래 'Keep schedule alive' 단계용
+  contents: write   # 마지막 전체 갱신 시각(.sync-state.json) 커밋용
 
 concurrency:
   group: watchlist
@@ -40,12 +38,20 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          MODE: ${{ inputs.mode || (github.event.schedule == '4 * * * *' && 'all' || 'trigger') }}
+          MODE: ${{ inputs.mode || 'auto' }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          FULL_SYNC_EVERY_DAYS: "14"
+          FULL_SYNC_STALE_DAYS: "3"
         run: python watchlist_sync.py "$MODE"
-      # 공개 저장소는 60일 동안 커밋이 없으면 예약 실행이 꺼진다 → 매시간 다시 켜 둔다
-      - name: Keep schedule alive
-        if: github.event.schedule == '4 * * * *'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/sync.yml/enable"
+      # 전체 갱신 시각을 저장소에 커밋. 이 커밋이 최소 2주마다 생기므로
+      # '60일 동안 활동 없는 저장소의 예약 실행 중지'에도 걸리지 않는다.
+      - name: Save sync state
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain .sync-state.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .sync-state.json
+            git commit -m "Full sync $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          fi

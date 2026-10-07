@@ -1,0 +1,31 @@
+{
+  "_설명": "VOD 속성 규칙. keep에 있는 이름은 직접 넣은 값도 유지되고, TMDB 방송사 중에서도 이 목록에 있거나 한국 방송사(KR)면 추가된다. 나머지(후지TV 등 해외 방송사)는 지운다. aliases는 TMDB 이름 → DB에 쓸 이름.",
+  "keep": [
+    "Netflix", "TVING", "wavve", "쿠팡플레이", "Watcha", "Laftel", "Disney+", "Apple TV+", "U+모바일tv",
+    "Prime Video", "HBO Max", "Hulu", "Peacock", "Paramount+", "Crunchyroll", "YouTube",
+    "영화관", "주요ott외/없음", "YouTube movie"
+  ],
+  "aliases": {
+    "Netflix basic with Ads": "Netflix",
+    "Netflix Standard with Ads": "Netflix",
+    "Disney Plus": "Disney+",
+    "Apple TV Plus": "Apple TV+",
+    "Apple TV": "Apple TV+",
+    "Amazon Prime Video": "Prime Video",
+    "Amazon Prime Video with Ads": "Prime Video",
+    "Amazon": "Prime Video",
+    "Coupang Play": "쿠팡플레이",
+    "Wavve": "wavve",
+    "Tving": "TVING",
+    "WATCHA": "Watcha",
+    "LAFTEL": "Laftel",
+    "U+ Mobile TV": "U+모바일tv",
+    "HBO": "HBO Max",
+    "Max": "HBO Max",
+    "Paramount Plus": "Paramount+",
+    "YouTube Premium": "YouTube",
+    "KBS1": "KBS",
+    "KBS2": "KBS",
+    "SBS TV": "SBS"
+  }
+}
