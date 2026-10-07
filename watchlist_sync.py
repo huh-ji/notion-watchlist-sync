@@ -404,13 +404,13 @@ def build_values(tmdb, kind, d):
         "Year": year,
         "Runtime": runtime,
         P_IMG: POSTER_BASE + d["poster_path"] if d.get("poster_path") else None,
-        "Director": crew_names(lambda c: c.get("job") == "Director", 5),
-        "Writer": crew_names(lambda c: c.get("department") == "Writing", 5)
+        "Director": crew_names(lambda c: c.get("job") == "Director", 10),
+        "Writer": crew_names(lambda c: c.get("department") == "Writing" if tv else c.get("job") in ("Writer", "Screenplay"), 10)
                   or (", ".join(c["name"] for c in d.get("created_by") or []) or None),
-        "Producer": crew_names(lambda c: c.get("job") in (("Executive Producer", "Producer") if tv else ("Producer",)), 5),
+        "Producer": crew_names(lambda c: c.get("job") == "Producer", 10),
         "Trailer": f"https://www.youtube.com/watch?v={trailer['key']}" if trailer else None,
         "Synopsis": d.get("overview") or None,
-        "Cast": ", ".join(c["name"] for c in (credits.get("cast") or [])[:10]) or None,
+        "Cast": ", ".join(c["name"] for c in (credits.get("cast") or [])[:20]) or None,
         "Content Rating": rating,
         "TMDB Rating": round(vote, 1) if vote else None,
         "IMDb ID": imdb_id or None,
