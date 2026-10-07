@@ -61,6 +61,7 @@ _vod = json.loads((HERE / "vod.json").read_text(encoding="utf-8"))
 VOD_KEEP = set(_vod["keep"])
 VOD_ALIASES = _vod["aliases"]
 WATCH_REGION = os.environ.get("WATCH_REGION", "KR")
+SEEN_PROVIDERS = set()  # 로그용: TMDB가 알려 준 한국 플랫폼 이름들
 
 
 def vod_name(name):
@@ -433,6 +434,8 @@ def build_values(tmdb, kind, d):
     region = ((d.get("watch/providers") or {}).get("results") or {}).get(WATCH_REGION) or {}
     for kind_ in ("flatrate", "free", "ads"):
         networks += [vod_name(p["provider_name"]) for p in region.get(kind_) or []]
+    for kind_ in ("flatrate", "free", "ads", "rent", "buy"):
+        SEEN_PROVIDERS.update(f"{p['provider_name']} ({kind_})" for p in region.get(kind_) or [])
     # OTT에 없는 영화가 한국에서 극장 개봉 중(또는 곧 개봉)이면 영화관
     if not tv and not networks and in_theaters(d):
         networks.append(THEATER)
@@ -476,6 +479,8 @@ class Runner:
             out[name] = conv
         if out:
             log.info("    바뀜: %s", ", ".join(out))
+            if P_VOD in out:
+                log.info("    VOD: %s → %s", read_prop(props.get(P_VOD)) or [], [x["name"] for x in out[P_VOD]["multi_select"]])
             if not DRY_RUN:
                 self.notion.update(page["id"], out)
         return bool(out)
@@ -633,6 +638,8 @@ def main():
             runner.sync()
             if not DRY_RUN:
                 save_last_full_sync(started)
+        if SEEN_PROVIDERS:
+            log.info("TMDB 한국 플랫폼: %s", ", ".join(sorted(SEEN_PROVIDERS)))
         log.info("완료 — %s", ", ".join(f"{k} {v}" for k, v in runner.stats.items()))
     except Fatal as e:
         log.error("중단: %s", e)
