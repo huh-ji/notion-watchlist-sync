@@ -302,6 +302,24 @@ def parse_trigger(text):
     return text, None, None
 
 
+THEATER = "영화관"
+THEATER_WINDOW = (timedelta(days=-int(os.environ.get("THEATER_DAYS") or 120)), timedelta(days=60))
+
+
+def in_theaters(d):
+    """한국 극장 개봉일(TMDB release_dates 유형 2·3)이 최근 THEATER_DAYS일 ~ 60일 뒤 사이인지."""
+    today = datetime.now(timezone.utc).date()
+    for r in (d.get("release_dates") or {}).get("results") or []:
+        if r.get("iso_3166_1") != WATCH_REGION:
+            continue
+        for x in r.get("release_dates") or []:
+            if x.get("type") in (2, 3) and x.get("release_date"):
+                day = datetime.fromisoformat(x["release_date"][:10]).date()
+                if THEATER_WINDOW[0] <= day - today <= THEATER_WINDOW[1]:
+                    return True
+    return False
+
+
 def episode_label(ep):
     if not ep:
         return None
@@ -408,14 +426,16 @@ def build_values(tmdb, kind, d):
     }
     # VOD 후보: 한국 방송사 + keep 목록의 OTT 방송사 + 한국에서 구독·무료로 볼 수 있는 서비스
     networks = []
-    if tv:
-        for n in d.get("networks") or []:
-            name = vod_name(n["name"])
-            if n.get("origin_country") == "KR" or name in VOD_KEEP:
-                networks.append(name)
-        region = ((d.get("watch/providers") or {}).get("results") or {}).get(WATCH_REGION) or {}
-        for kind_ in ("flatrate", "free", "ads"):
-            networks += [vod_name(p["provider_name"]) for p in region.get(kind_) or []]
+    for n in (d.get("networks") or []) if tv else []:
+        name = vod_name(n["name"])
+        if n.get("origin_country") == "KR" or name in VOD_KEEP:
+            networks.append(name)
+    region = ((d.get("watch/providers") or {}).get("results") or {}).get(WATCH_REGION) or {}
+    for kind_ in ("flatrate", "free", "ads"):
+        networks += [vod_name(p["provider_name"]) for p in region.get(kind_) or []]
+    # OTT에 없는 영화가 한국에서 극장 개봉 중(또는 곧 개봉)이면 영화관
+    if not tv and not networks and in_theaters(d):
+        networks.append(THEATER)
 
     ko_title = None
     for t in (d.get("translations") or {}).get("translations") or []:

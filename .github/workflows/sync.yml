@@ -36,7 +36,7 @@ jobs:
       - name: Sync
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID || secrets.NOTION_PAGE_ID }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           MODE: ${{ inputs.mode || 'auto' }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
